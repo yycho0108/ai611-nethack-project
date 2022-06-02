@@ -43,8 +43,8 @@ def vtrace_from_importance_weights(
     for t in range(discounts.shape[dim_t] - 1, -1, -1):
         delta = th.narrow(deltas, dim_t, t, 1)
         discount = th.narrow(discounts, dim_t, t, 1)
-        cs = th.narrow(cs, dim_t, t, 1)
-        acc = delta + discount * cs * acc
+        c = th.narrow(cs, dim_t, t, 1)
+        acc = delta + discount * c * acc
         result.append(acc)
     result.reverse()
     vs = values + th.cat(result, dim=dim_t)

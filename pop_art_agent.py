@@ -30,7 +30,8 @@ class PopArtModule(nn.Module):
         y_hat = self.linear(x)
         with th.no_grad():
             y = y_hat * self.sigma * self.mu
-        return y
+        # FIXME(ycho): hack with single-task assumption !!!!
+        return (y.squeeze(-1), y_hat.squeeze(-1))
 
     def update_parameters(self, vs, task):
         # TODO(ycho): figure out the following:
@@ -66,7 +67,7 @@ class PopArtAgent(nn.Module):
                  state_encoder: nn.Module,
                  env: gym.Env,
                  input_dim: int = 4,
-                 hidden_dim: int = 8,
+                 hidden_dim: int = 4,
                  action_dim: int = 2):
         super().__init__()
         use_continuous_actions: bool = False
@@ -87,7 +88,7 @@ class PopArtAgent(nn.Module):
             )
         self.pop_art = PopArtModule(
             hidden_dim,
-            action_dim)
+            1)
 
     def get_action_distribution(
             self, state: th.Tensor) -> th.distributions.Distribution:
@@ -134,26 +135,27 @@ class PopArtAgent(nn.Module):
         return buf
 
     def sample_steps(self, buf):
-        return buf
+        # return buf
+        return [[th.as_tensor(e) for e in x] for x in buf]
 
     def _learn_step(self):
         # -- collect-rollouts --
         buf = self.interact()
         samples = self.sample_steps(buf)
-        obs0s, actions, lp0, obs1s, rews, dones = zip(*samples)
+        obs0s, actions, lp0, obs1s, rewards, dones = zip(*samples)
 
         obs0s = th.stack(obs0s, axis=0)
         actions = th.stack(actions, axis=0)
         lp0 = th.stack(lp0, axis=0)
         obs1s = th.stack(obs1s, axis=0)
-        rews = th.stack(rews, axis=0)
+        rewards = th.stack(rewards, axis=0)
         dones = th.stack(dones, axis=0)
 
         state0s = self.state_encoder(obs0s)
         action_dist = self.get_action_distribution(state0s)
         lp1 = action_dist.log_prob(actions)
         baseline, normalized_baseline = self.pop_art(state0s)
-        action = action_dist.rsample()
+        action = action_dist.sample()
         log_prob = action_dist.log_prob(action)
         log_rho = (lp1 - lp0)  # log importance ratio and stuff
         # log_rho = th.clamp(log_rho, max=0.0)
