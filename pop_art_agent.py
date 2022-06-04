@@ -196,6 +196,10 @@ class PopArtAgent(nn.Module):
         # clip_grad_norm_(...)
         self.optimizer.step()
 
+        # TODO(ycho): `task` labels are required for pop-art.
+        # Should we supply this in some way??
+        # self.pop_art.update_parameters(vs, task)
+
     def learn(self):
         for _ in range(16):
             self._learn_step()
