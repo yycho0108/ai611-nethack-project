@@ -6,6 +6,8 @@ nn = th.nn
 F = nn.functional
 from functools import partial
 from pop_art_agent import PopArtAgent
+
+# NOTE(ycho): only for temporary testing
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 

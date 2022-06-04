@@ -2,6 +2,7 @@
 
 from typing import Tuple, Optional, Union, Iterable, Any, Dict
 from abc import ABC, abstractmethod, abstractproperty
+import numpy as np
 import torch as th
 nn = th.nn
 F = nn.functional
@@ -21,9 +22,11 @@ class PopArtModule(nn.Module):
 
         self.linear = nn.Linear(c_in, c_out, True)
         self.register_buffer('mu', th.zeros(c_out,
-                                            requires_grad=False))
+                                            requires_grad=False,
+                                            dtype=th.float32))
         self.register_buffer('sigma', th.ones(c_out,
-                                              requires_grad=False))
+                                              requires_grad=False,
+                                              dtype=th.float32))
         # self.linear.reset_parameters()
 
     def forward(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
@@ -68,9 +71,9 @@ class PopArtAgent(nn.Module):
                  env: gym.Env,
                  input_dim: int = 4,
                  hidden_dim: int = 4,
-                 action_dim: int = 2):
+                 action_dim: int = 2,
+                 use_continuous_actions: bool = False):
         super().__init__()
-        use_continuous_actions: bool = False
         self.env = env
         self.state_encoder = state_encoder
 
@@ -89,6 +92,7 @@ class PopArtAgent(nn.Module):
         self.pop_art = PopArtModule(
             hidden_dim,
             1)
+        self.optimizer = th.optim.Adam(self.parameters())
 
     def get_action_distribution(
             self, state: th.Tensor) -> th.distributions.Distribution:
@@ -130,6 +134,7 @@ class PopArtAgent(nn.Module):
 
             # NOTE(ycho): list(int(x)) is obviously a hack...
             obs, rew, done, info = env.step(list(int(x) for x in action))
+            rew = np.asarray(rew, dtype=np.float32)
             buf.append((prv_obs, action, log_prob, obs, rew, done))
             prv_obs = obs
         return buf
@@ -144,6 +149,7 @@ class PopArtAgent(nn.Module):
         samples = self.sample_steps(buf)
         obs0s, actions, lp0, obs1s, rewards, dones = zip(*samples)
 
+        # B,T,...
         obs0s = th.stack(obs0s, axis=0)
         actions = th.stack(actions, axis=0)
         lp0 = th.stack(lp0, axis=0)
@@ -161,18 +167,14 @@ class PopArtAgent(nn.Module):
         # log_rho = th.clamp(log_rho, max=0.0)
         rho = th.exp(log_rho)
 
-        bootstrap_value = baseline[-1]  # ???
-        discounts = (~dones).float() * 0.99  # ???
+        # Derive bootstrap / discount values
+        bootstrap_value = baseline[-1]
+        discounts = (~dones).to(th.float32) * 0.99
 
-        # Looks a lot like GAE
-        #log_rhos: th.Tensor,
-        #discounts: th.Tensor,
-        #rewards: th.Tensor,
-        #values: th.Tensor,
-        #dim_t: int = 0,
+        # Vtrace calculation
         vs, pg_adv = vtrace_from_importance_weights(
             log_rho,
-            (~dones).float() * 0.99,
+            discounts,
             rewards,
             baseline,
             dim_t=1)  # NO idea, to be honest
@@ -180,11 +182,19 @@ class PopArtAgent(nn.Module):
         # normalized v_s
         nvs = (vs - self.pop_art.mu) / self.pop_art.sigma
         # policy gradient loss, valid_mask=?
-        pg_loss = th.mean(-log_prob * pg_adv)
+        pg_loss = th.mean(-log_prob * pg_adv).to(th.float32)
         # value baseline loss, valid_mask=?
-        vb_loss = F.mse_loss(nvs, normalized_baseline)
+        vb_loss = F.mse_loss(nvs, normalized_baseline).to(th.float32)
         # entropy loss [...]
-        ent_loss = -action_dist.entropy()
+        ent_loss = -th.mean(action_dist.entropy())
+
+        loss = (pg_loss + vb_loss + ent_loss)
+        print('loss', loss)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        # clip_grad_norm_(...)
+        self.optimizer.step()
 
     def learn(self):
         for _ in range(16):
