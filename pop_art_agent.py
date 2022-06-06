@@ -117,7 +117,7 @@ class PopArtAgent(nn.Module):
         buf = []
 
         done: bool = True
-        prv_obs: th.Tensor = None
+        prv_obs: Dict[str, np.ndarray] = None
 
         for _ in range(128):
             # obs = env.reset() if done else prv_obs
@@ -126,7 +126,8 @@ class PopArtAgent(nn.Module):
             # obs = env.reset() if (prv_obs is None) else prv_obs
 
             with th.no_grad():
-                state = self.state_encoder(prv_obs)
+                prv_obs_t = {key: th.tensor(value).unsqueeze(dim=0) for key, value in prv_obs.items()}
+                state = self.state_encoder(prv_obs_t)
                 dist = self.get_action_distribution(state)
                 action = dist.sample()
                 # NOTE(ycho): store `log_prob` for vtrace calculation
@@ -146,6 +147,7 @@ class PopArtAgent(nn.Module):
     def _learn_step(self):
         # -- collect-rollouts --
         buf = self.interact()
+        return
         samples = self.sample_steps(buf)
         obs0s, actions, lp0, obs1s, rewards, dones = zip(*samples)
 
@@ -201,5 +203,5 @@ class PopArtAgent(nn.Module):
         # self.pop_art.update_parameters(vs, task)
 
     def learn(self):
-        for _ in range(16):
+        for _ in range(1):
             self._learn_step()

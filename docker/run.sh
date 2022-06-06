@@ -21,7 +21,6 @@ docker pull ${IMAGE_TAG}
 
 docker run -it --rm \
     --mount type=bind,source=${REPO_ROOT},target="/home/aicrowd/$(basename ${REPO_ROOT})" \
-    --mount type=bind,source=${REPO_ROOT}/../../../neurips-2021-the-nethack-challenge/,target="/home/aicrowd/nhc" \
     --network host \
     --privileged \
     --gpus all \
