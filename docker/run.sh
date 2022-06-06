@@ -3,7 +3,7 @@
 set -ex
 
 # NOTE(ycho): see github.com/facebookresearch/nle
-IMAGE_TAG='fairnle/nle-focal:stable'
+IMAGE_TAG='fairnle/challenge:dev'
 
 # Figure out repository root.
 SCRIPT_DIR="$( cd "$( dirname $(realpath "${BASH_SOURCE[0]}") )" && pwd )"
@@ -18,8 +18,10 @@ docker pull ${IMAGE_TAG}
 # * Privileged permissions
 # * All GPU devices visible
 # * Current working git repository mounted at /root
+
 docker run -it --rm \
-    --mount type=bind,source=${REPO_ROOT},target="/root/$(basename ${REPO_ROOT})" \
+    --mount type=bind,source=${REPO_ROOT},target="/home/aicrowd/$(basename ${REPO_ROOT})" \
+    --mount type=bind,source=${REPO_ROOT}/../../../neurips-2021-the-nethack-challenge/,target="/home/aicrowd/nhc" \
     --network host \
     --privileged \
     --gpus all \
