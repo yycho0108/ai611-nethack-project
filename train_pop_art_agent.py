@@ -13,7 +13,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 
 
 def main():
-    num_env = 8
+    num_env = 16
     env_fns = [partial(gym.make, 'NetHackScore-v0') for _ in range(num_env)]
     env = SubprocVecEnv(env_fns)
     state_encoder = NetHackNet(

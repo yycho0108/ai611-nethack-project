@@ -72,7 +72,7 @@ class PopArtAgent(nn.Module):
                  state_encoder: NetHackNet,
                  env: gym.Env, 
                  num_env: int = 8, 
-                 num_interactions = 5, 
+                 num_interactions: int = 128, 
                  hidden_dim: int = 4,
                  use_continuous_actions: bool = False):
         super().__init__()
@@ -80,7 +80,6 @@ class PopArtAgent(nn.Module):
         self.num_env = num_env
         self.num_interactions = num_interactions
         self.state_encoder = state_encoder
-        self.is_encoder_intialized = False
         self.action_dim = self.env.action_space.n
 
         if use_continuous_actions:
@@ -119,24 +118,27 @@ class PopArtAgent(nn.Module):
         else:
             return dist.sample()
 
-    def interact(self):
-        env = self.env
-        buf = []
+    def reset(self):
+        done = np.ones(self.num_env, dtype=np.bool8)
+        prv_obs = self._format_observations(self.env.reset())
+        core_state = self.state_encoder.initial_state(batch_size=self.num_env)
+        self._save_values(done, prv_obs, core_state)
 
-        done: np.ndarray = np.ones(self.num_env, dtype=np.bool8)
-        prv_obs: Dict[str, th.Tensor] = None
-        prv_core_state: Tuple[th.Tensor, th.Tensor] = None
+    def _save_values(self, done, prv_obs, core_state):
+        self.done = done
+        self.prv_obs = prv_obs
+        self.core_state = core_state
+
+    def _retrive_values(self):
+        return self.done, self.prv_obs, self.core_state
+
+    def interact(self):
+        buf = []
+        done, prv_obs, prv_core_state = self._retrive_values()
+        initial_core_state = prv_core_state
 
         for _ in range(self.num_interactions):
-            # obs = env.reset() if done else prv_obs
-            if prv_obs is None:
-                prv_obs = self._format_observations(env.reset())
-            # obs = env.reset() if (prv_obs is None) else prv_obs
-
             with th.no_grad():
-                if not self.is_encoder_intialized:
-                    prv_core_state = self.state_encoder.initial_state(batch_size=self.num_env)
-                    self.is_encoder_initialized = True
                 state, core_state = self.state_encoder(
                     prv_obs, prv_core_state, th.tensor(done, dtype=th.bool).unsqueeze(dim=0)
                 )
@@ -145,13 +147,16 @@ class PopArtAgent(nn.Module):
                 # NOTE(ycho): store `log_prob` for vtrace calculation
                 log_prob = dist.log_prob(action).squeeze()
 
-            obs, rew, done, info = env.step(action.cpu().numpy())
+            obs, rew, done, info = self.env.step(action.cpu().numpy())
             obs = self._format_observations(obs)
             rew = np.asarray(rew, dtype=np.float32)
             buf.append((prv_obs, action, log_prob, obs, rew, done))
             prv_obs = obs
             prv_core_state = core_state
-        return buf, core_state
+
+        self._save_values(done, prv_obs, core_state)
+
+        return buf, initial_core_state
 
     def _format_observations(self, observation, keys=("glyphs", "blstats")) -> Dict[str, th.Tensor]:
         observations: Dict[str, th.Tensor] = dict()
@@ -175,7 +180,7 @@ class PopArtAgent(nn.Module):
 
     def _learn_step(self):
         # -- collect-rollouts --
-        buf, core_state = self.interact()
+        buf, initial_core_state = self.interact()
         samples = self.sample_steps(buf)
         obs0s, actions, lp0, obs1s, rewards, dones = zip(*samples)
 
@@ -187,7 +192,7 @@ class PopArtAgent(nn.Module):
         rewards = th.stack(rewards, axis=0)
         dones = th.stack(dones, axis=0)
 
-        state0s, _ = self.state_encoder(obs0s, core_state, dones)
+        state0s, _ = self.state_encoder(obs0s, initial_core_state, dones)
         action_dist = self.get_action_distribution(state0s)
         lp1 = action_dist.log_prob(actions)
         baseline, normalized_baseline = self.pop_art(state0s)
@@ -244,5 +249,6 @@ class PopArtAgent(nn.Module):
         return {key: th.cat(_temp_obs_stack[key], dim=0) for key in keys}
 
     def learn(self):
-        for _ in range(1):
+        self.reset()
+        for _ in range(16):
             self._learn_step()
