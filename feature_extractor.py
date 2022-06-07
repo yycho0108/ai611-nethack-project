@@ -180,7 +180,7 @@ class NetHackNet(nn.Module):
         out = embed.weight.index_select(0, x.reshape(-1))
         return out.reshape(x.shape + (-1,))
 
-    def forward(self, env_outputs, core_state):
+    def forward(self, env_outputs, core_state, done):
         # -- [T x B x H x W]
         glyphs = env_outputs["glyphs"]
 
@@ -256,7 +256,7 @@ class NetHackNet(nn.Module):
         if self.use_lstm:
             core_input = st.view(T, B, -1)
             core_output_list = []
-            notdone = (~env_outputs["done"]).float()
+            notdone = (~done).float()
             for input, nd in zip(core_input.unbind(), notdone.unbind()):
                 # Reset core state to zero whenever an episode ended.
                 # Make `done` broadcastable with (num_layers, B, hidden_size)
@@ -269,10 +269,7 @@ class NetHackNet(nn.Module):
         else:
             core_output = st
 
-        return (
-            core_output.view(T, B, -1),
-            core_state
-        )
+        return core_output, core_state
 
         # -- [B x A]
         # policy_logits = self.policy(core_output)

@@ -13,11 +13,17 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 
 
 def main():
-    env_fns = [partial(gym.make, 'NetHackScore-v0') for _ in range(2)]
+    num_env = 8
+    env_fns = [partial(gym.make, 'NetHackScore-v0') for _ in range(num_env)]
     env = SubprocVecEnv(env_fns)
-    state_encoder = NetHackNet(use_lstm=True)
-    agent = PopArtAgent(state_encoder, env,
-                        action_dim=2)
+    state_encoder = NetHackNet(
+        observation_shape=env.observation_space, 
+        num_actions=env.action_space.n, 
+        use_lstm=True
+    )
+    agent = PopArtAgent(
+        state_encoder, env, num_env=num_env, hidden_dim=512
+    )
     agent.learn()
 
 
