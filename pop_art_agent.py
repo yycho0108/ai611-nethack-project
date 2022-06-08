@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import Tuple, Optional, Union, Iterable, Any, Dict
+from typing import Tuple, Optional, Union, Iterable, Any, Dict, List
 from abc import ABC, abstractmethod, abstractproperty
 import numpy as np
 import torch as th
@@ -11,6 +11,8 @@ import einops
 from torch.distributions import Normal, Independent, Categorical
 
 from vtrace import vtrace_from_importance_weights
+
+from feature_extractor import NetHackNet
 
 
 class PopArtModule(nn.Module):
@@ -67,27 +69,30 @@ class PopArtModule(nn.Module):
 
 class PopArtAgent(nn.Module):
     def __init__(self,
-                 state_encoder: nn.Module,
-                 env: gym.Env,
-                 input_dim: int = 4,
+                 state_encoder: NetHackNet,
+                 env: gym.Env, 
+                 num_env: int = 8, 
+                 num_interactions: int = 128, 
                  hidden_dim: int = 4,
-                 action_dim: int = 2,
                  use_continuous_actions: bool = False):
         super().__init__()
         self.env = env
+        self.num_env = num_env
+        self.num_interactions = num_interactions
         self.state_encoder = state_encoder
+        self.action_dim = self.env.action_space.n
 
         if use_continuous_actions:
             self.policy = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
+                nn.Linear(self.state_encoder.h_dim, hidden_dim),
                 nn.LeakyReLU(),
-                nn.Linear(hidden_dim, 2 * action_dim, bias=False)
+                nn.Linear(hidden_dim, 2 * self.action_dim, bias=False)
             )
         else:
             self.policy = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
+                nn.Linear(self.state_encoder.h_dim, hidden_dim),
                 nn.LeakyReLU(),
-                nn.Linear(hidden_dim, action_dim, bias=False)
+                nn.Linear(hidden_dim, self.action_dim, bias=False)
             )
         self.pop_art = PopArtModule(
             hidden_dim,
@@ -97,6 +102,7 @@ class PopArtAgent(nn.Module):
     def get_action_distribution(
             self, state: th.Tensor) -> th.distributions.Distribution:
         params = self.policy(state)
+        params = params.reshape(-1, self.num_env, self.action_dim)
         return Categorical(logits=params)
         # mu, std = einops.rearrange(params, '... (k d) -> k ... d', k=2)
         # return Independent(Normal(mu, std), 1)
@@ -112,55 +118,86 @@ class PopArtAgent(nn.Module):
         else:
             return dist.sample()
 
+    def reset(self):
+        done = np.ones(self.num_env, dtype=np.bool8)
+        prv_obs = self._format_observations(self.env.reset())
+        core_state = self.state_encoder.initial_state(batch_size=self.num_env)
+        self._save_values(done, prv_obs, core_state)
+
+    def _save_values(self, done, prv_obs, core_state):
+        self.done = done
+        self.prv_obs = prv_obs
+        self.core_state = core_state
+
+    def _retrive_values(self):
+        return self.done, self.prv_obs, self.core_state
+
     def interact(self):
-        env = self.env
         buf = []
+        done, prv_obs, prv_core_state = self._retrive_values()
+        initial_core_state = prv_core_state
 
-        done: bool = True
-        prv_obs: th.Tensor = None
-
-        for _ in range(128):
-            # obs = env.reset() if done else prv_obs
-            if prv_obs is None:
-                prv_obs = env.reset()
-            # obs = env.reset() if (prv_obs is None) else prv_obs
-
+        for _ in range(self.num_interactions):
             with th.no_grad():
-                state = self.state_encoder(prv_obs)
+                state, core_state = self.state_encoder(
+                    prv_obs, prv_core_state, th.tensor(done, dtype=th.bool).unsqueeze(dim=0)
+                )
                 dist = self.get_action_distribution(state)
-                action = dist.sample()
+                action = dist.sample().squeeze()
                 # NOTE(ycho): store `log_prob` for vtrace calculation
-                log_prob = dist.log_prob(action)
+                log_prob = dist.log_prob(action).squeeze()
 
-            # NOTE(ycho): list(int(x)) is obviously a hack...
-            obs, rew, done, info = env.step(list(int(x) for x in action))
+            obs, rew, done, info = self.env.step(action.cpu().numpy())
+            obs = self._format_observations(obs)
             rew = np.asarray(rew, dtype=np.float32)
             buf.append((prv_obs, action, log_prob, obs, rew, done))
             prv_obs = obs
-        return buf
+            prv_core_state = core_state
+
+        self._save_values(done, prv_obs, core_state)
+
+        return buf, initial_core_state
+
+    def _format_observations(self, observation, keys=("glyphs", "blstats")) -> Dict[str, th.Tensor]:
+        observations: Dict[str, th.Tensor] = dict()
+        for key in keys:
+            entry = observation[key]
+            entry = th.from_numpy(entry).unsqueeze(dim=0)
+            observations[key] = entry
+        return observations
 
     def sample_steps(self, buf):
-        # return buf
-        return [[th.as_tensor(e) for e in x] for x in buf]
+        buf_t = []
+        for x in buf:
+            buf_step = []
+            for e in x:
+                if isinstance(e, np.ndarray):
+                    buf_step.append(th.as_tensor(e))
+                else:
+                    buf_step.append(e)
+            buf_t.append(buf_step)
+        return buf_t
 
     def _learn_step(self):
         # -- collect-rollouts --
-        buf = self.interact()
+        buf, initial_core_state = self.interact()
         samples = self.sample_steps(buf)
         obs0s, actions, lp0, obs1s, rewards, dones = zip(*samples)
 
-        # B,T,...
-        obs0s = th.stack(obs0s, axis=0)
+        # T, B, ...
+        obs0s = self._stack_observations(obs0s)
         actions = th.stack(actions, axis=0)
         lp0 = th.stack(lp0, axis=0)
-        obs1s = th.stack(obs1s, axis=0)
+        obs1s = self._stack_observations(obs1s)
         rewards = th.stack(rewards, axis=0)
         dones = th.stack(dones, axis=0)
 
-        state0s = self.state_encoder(obs0s)
+        state0s, _ = self.state_encoder(obs0s, initial_core_state, dones)
         action_dist = self.get_action_distribution(state0s)
         lp1 = action_dist.log_prob(actions)
         baseline, normalized_baseline = self.pop_art(state0s)
+        baseline = baseline.reshape((-1, self.num_env))
+        normalized_baseline = normalized_baseline.reshape((-1, self.num_env))
         action = action_dist.sample()
         log_prob = action_dist.log_prob(action)
         log_rho = (lp1 - lp0)  # log importance ratio and stuff
@@ -200,6 +237,18 @@ class PopArtAgent(nn.Module):
         # Should we supply this in some way??
         # self.pop_art.update_parameters(vs, task)
 
+    def _stack_observations(self, observations: Iterable[Dict[str, th.Tensor]]) -> Dict[str, th.Tensor]:
+        _temp_obs_stack: Dict[str, List[th.Tensor]] = dict()
+        keys: List[str] = list()
+        for observation in observations:
+            for key, value in observation.items():
+                if key not in _temp_obs_stack: 
+                    _temp_obs_stack[key] = list()
+                    keys.append(key)
+                _temp_obs_stack[key].append(value)
+        return {key: th.cat(_temp_obs_stack[key], dim=0) for key in keys}
+
     def learn(self):
+        self.reset()
         for _ in range(16):
             self._learn_step()
