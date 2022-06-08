@@ -163,8 +163,8 @@ class NetHackNet(nn.Module):
         if self.use_lstm:
             self.core = nn.LSTM(self.h_dim, self.h_dim, num_layers=1)
 
-        self.policy = nn.Linear(self.h_dim, self.num_actions)
-        self.baseline = nn.Linear(self.h_dim, 1)
+        # self.policy = nn.Linear(self.h_dim, self.num_actions)
+        # self.baseline = nn.Linear(self.h_dim, 1)
 
     def initial_state(self, batch_size=1):
         if not self.use_lstm:
@@ -228,7 +228,6 @@ class NetHackNet(nn.Module):
 
         # -- [B x K']
         crop_rep = crop_rep.view(T * B, -1)
-        assert crop_rep.shape[0] == T * B
 
         reps.append(crop_rep)
 
@@ -242,8 +241,6 @@ class NetHackNet(nn.Module):
 
         # -- [B x K']
         glyphs_rep = glyphs_rep.view(T * B, -1)
-
-        assert glyphs_rep.shape[0] == T * B
 
         # -- [B x K'']
         reps.append(glyphs_rep)
