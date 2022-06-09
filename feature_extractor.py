@@ -5,7 +5,8 @@ import torch
 
 
 def _step_to_range(delta, num_steps):
-    """Range of `num_steps` integers with distance `delta` centered around zero."""
+    """Range of `num_steps` integers with distance `delta` centered around
+    zero."""
     return delta * torch.arange(-num_steps // 2, num_steps // 2)
 
 
@@ -170,9 +171,9 @@ class NetHackNet(nn.Module):
         if not self.use_lstm:
             return tuple()
         return tuple(
-            torch.zeros(self.core.num_layers, batch_size, self.core.hidden_size)
-            for _ in range(2)
-        )
+            torch.zeros(
+                self.core.num_layers, batch_size, self.core.hidden_size)
+            for _ in range(2))
 
     def _select(self, embed, x):
         # Work around slow backward pass of nn.Embedding, see
