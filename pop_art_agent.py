@@ -9,6 +9,8 @@ F = nn.functional
 import gym
 import einops
 from torch.distributions import Normal, Independent, Categorical
+from torch.utils.tensorboard import SummaryWriter
+from tqdm.auto import tqdm
 
 from vtrace import vtrace_from_importance_weights
 
@@ -39,9 +41,6 @@ class PopArtModule(nn.Module):
         return (y.squeeze(-1), y_hat.squeeze(-1))
 
     def update_parameters(self, vs, task):
-        # TODO(ycho): figure out the following:
-        # vs=?
-        # task=?
         mu0 = self.mu
         sigma0 = self.sigma
 
@@ -69,13 +68,15 @@ class PopArtModule(nn.Module):
 
 class PopArtAgent(nn.Module):
     def __init__(self,
+                 device: th.device,
                  state_encoder: NetHackNet,
-                 env: gym.Env, 
-                 num_env: int = 8, 
-                 num_interactions: int = 128, 
+                 env: gym.Env,
+                 num_env: int = 8,
+                 num_interactions: int = 128,
                  hidden_dim: int = 4,
                  use_continuous_actions: bool = False):
         super().__init__()
+        self.device = device
         self.env = env
         self.num_env = num_env
         self.num_interactions = num_interactions
@@ -119,9 +120,10 @@ class PopArtAgent(nn.Module):
             return dist.sample()
 
     def reset(self):
-        done = np.ones(self.num_env, dtype=np.bool8)
+        done = th.ones(self.num_env, dtype=bool, device=self.device)
         prv_obs = self._format_observations(self.env.reset())
         core_state = self.state_encoder.initial_state(batch_size=self.num_env)
+        core_state = tuple(s.to(self.device) for s in core_state)
         self._save_values(done, prv_obs, core_state)
 
     def _save_values(self, done, prv_obs, core_state):
@@ -137,32 +139,53 @@ class PopArtAgent(nn.Module):
         done, prv_obs, prv_core_state = self._retrive_values()
         initial_core_state = prv_core_state
 
+        s0 = self.state_encoder.initial_state(
+            batch_size=self.num_env)
+        # FIXME(ycho):
+        # I really don't like these tuple-based
+        # state representations...
+        s0 = tuple(s.to(self.device) for s in s0)
+
         for _ in range(self.num_interactions):
             with th.no_grad():
                 state, core_state = self.state_encoder(
-                    prv_obs, prv_core_state, th.tensor(done, dtype=th.bool).unsqueeze(dim=0)
-                )
+                    prv_obs, prv_core_state, th.as_tensor(
+                        done, dtype=th.bool, device=self.device)[None])
                 dist = self.get_action_distribution(state)
                 action = dist.sample().squeeze()
                 # NOTE(ycho): store `log_prob` for vtrace calculation
                 log_prob = dist.log_prob(action).squeeze()
 
-            obs, rew, done, info = self.env.step(action.cpu().numpy())
+            obs, rew, done, info = self.env.step(action.detach().cpu().numpy())
             obs = self._format_observations(obs)
             rew = np.asarray(rew, dtype=np.float32)
             buf.append((prv_obs, action, log_prob, obs, rew, done))
             prv_obs = obs
-            prv_core_state = core_state
 
-        self._save_values(done, prv_obs, core_state)
+            # NOTE(ycho): Need to reset initial states
+            # for all environments that have terminated.
+            # Since this operation might not be needed,
+            if np.any(done):
+                prv_core_state = tuple(
+                    th.where(
+                        th.as_tensor(
+                            done[None, :, None],
+                            device=s0[i].device),
+                        s0[i],
+                        core_state[i]) for i in range(2))
+            else:
+                prv_core_state = core_state
+
+        self._save_values(done, prv_obs, prv_core_state)
 
         return buf, initial_core_state
 
-    def _format_observations(self, observation, keys=("glyphs", "blstats")) -> Dict[str, th.Tensor]:
+    def _format_observations(self, observation, keys=(
+            "glyphs", "blstats")) -> Dict[str, th.Tensor]:
         observations: Dict[str, th.Tensor] = dict()
         for key in keys:
             entry = observation[key]
-            entry = th.from_numpy(entry).unsqueeze(dim=0)
+            entry = th.from_numpy(entry).unsqueeze(dim=0).to(self.device)
             observations[key] = entry
         return observations
 
@@ -189,8 +212,8 @@ class PopArtAgent(nn.Module):
         actions = th.stack(actions, axis=0)
         lp0 = th.stack(lp0, axis=0)
         obs1s = self._stack_observations(obs1s)
-        rewards = th.stack(rewards, axis=0)
-        dones = th.stack(dones, axis=0)
+        rewards = th.stack(rewards, axis=0).to(self.device)
+        dones = th.stack(dones, axis=0).to(self.device)
 
         state0s, _ = self.state_encoder(obs0s, initial_core_state, dones)
         action_dist = self.get_action_distribution(state0s)
@@ -226,7 +249,6 @@ class PopArtAgent(nn.Module):
         ent_loss = -th.mean(action_dist.entropy())
 
         loss = (pg_loss + vb_loss + ent_loss)
-        print('loss', loss)
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -236,19 +258,44 @@ class PopArtAgent(nn.Module):
         # TODO(ycho): `task` labels are required for pop-art.
         # Should we supply this in some way??
         # self.pop_art.update_parameters(vs, task)
+        return {
+            'pg_loss': pg_loss,
+            'vb_loss': vb_loss,
+            'ent_loss': ent_loss,
+            'loss': loss,
+            'reward': th.mean(rewards)
+        }
 
-    def _stack_observations(self, observations: Iterable[Dict[str, th.Tensor]]) -> Dict[str, th.Tensor]:
+    def _stack_observations(self, observations: Iterable
+                            [Dict[str, th.Tensor]]) -> Dict[str, th.Tensor]:
         _temp_obs_stack: Dict[str, List[th.Tensor]] = dict()
         keys: List[str] = list()
         for observation in observations:
             for key, value in observation.items():
-                if key not in _temp_obs_stack: 
+                if key not in _temp_obs_stack:
                     _temp_obs_stack[key] = list()
                     keys.append(key)
                 _temp_obs_stack[key].append(value)
-        return {key: th.cat(_temp_obs_stack[key], dim=0) for key in keys}
+        return {key: th.cat(_temp_obs_stack[key], dim=0).to(
+            self.device) for key in keys}
 
-    def learn(self):
+    def learn(self, num_steps: int = 1000):
+        """Learn for `num_steps` iterations.
+
+        NOTE(ycho): actual number of env-steps
+        = num_steps X num_interactions X num_envs.
+        """
         self.reset()
-        for _ in range(16):
-            self._learn_step()
+        writer = SummaryWriter('./log')
+        with tqdm(range(num_steps)) as pbar:
+            for i in pbar:
+                tensors: Dict[str, th.Tensor] = self._learn_step()
+
+                loss = tensors['loss'].item()
+                pbar.set_description(F'loss={loss:.3f}')
+
+                global_step = i * self.num_env * self.num_interactions
+                for k, v in tensors.items():
+                    writer.add_scalar(k, v.item(), global_step)
+                writer.add_scalar('reward', tensors['reward'].item(),
+                                  global_step)
