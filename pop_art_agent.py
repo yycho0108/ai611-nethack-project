@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 
 from vtrace import vtrace_from_importance_weights
 
-from feature_extractor import NetHackNet
+from feature import NetHackEncoder
 
 
 class PopArtModule(nn.Module):
@@ -69,7 +69,7 @@ class PopArtModule(nn.Module):
 class PopArtAgent(nn.Module):
     def __init__(self,
                  device: th.device,
-                 state_encoder: NetHackNet,
+                 state_encoder: NetHackEncoder,
                  env: gym.Env,
                  num_env: int = 8,
                  num_interactions: int = 128,

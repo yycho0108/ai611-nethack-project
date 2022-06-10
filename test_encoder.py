@@ -5,7 +5,7 @@ import nle
 import torch as th
 from gym.wrappers.transform_observation import TransformObservation
 
-from feature import NethackEncoder
+from feature import NetHackEncoder
 
 
 def transform_observation(obs):
@@ -14,8 +14,8 @@ def transform_observation(obs):
     * (1) add channel dimension to `glyphs`
     * (2) add batch dimension to all relevant inputs.
     """
-    return {'glyphs': th.as_tensor(obs['glyphs'][None, ..., None, :, :]),
-            'blstats': th.as_tensor(obs['blstats'][None]),
+    return {'glyphs': th.as_tensor(obs['glyphs'][None, None]),
+            'blstats': th.as_tensor(obs['blstats'][None, None]),
             'message': th.as_tensor(obs['message'][None])}
 
 
@@ -23,8 +23,10 @@ def main():
     env = gym.make('NetHackScore-v0')
     env = TransformObservation(env, transform_observation)
     obs = env.reset()
-    enc = NethackEncoder()
-    feat = enc(obs)
+    enc = NetHackEncoder(env.observation_space)
+    core_state = enc.initial_state()
+    done = th.zeros((1, 1), dtype=th.int)
+    feat, _ = enc(obs, core_state, done)
     print(feat.shape)
 
 
