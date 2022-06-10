@@ -12,9 +12,33 @@ from feature import NetHackEncoder
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 
+class FormatObservationWrapper(gym.ObservationWrapper):
+    def __init__(self,
+                 env: gym.Env,
+                 keys: Tuple[str, ...] = ('glyphs', 'blstats'),
+                 ):
+        super().__init__(env)
+        self.keys = keys
+        #self.observation_space = self.env.observation_space
+
+    def observation(self, observation):
+        observations: Dict[str, th.Tensor] = dict()
+        for key in keys:
+            entry = observation[key]
+            entry = th.from_numpy(entry).unsqueeze(dim=0)
+            observations[key] = entry
+        return observations
+
+
+def make_env(*args, **kwds) -> gym.Env:
+    env = gym.make('NetHackScore-v0')
+    env = FormatObservationWrapper(env)
+    return env
+
+
 def main():
     num_env = 16
-    env_fns = [partial(gym.make, 'NetHackScore-v0') for _ in range(num_env)]
+    env_fns = [make_env for _ in range(num_env)]
     env = SubprocVecEnv(env_fns)
     device: th.device = (
         th.device('cuda') if th.cuda.is_available() else th.device('cpu'))

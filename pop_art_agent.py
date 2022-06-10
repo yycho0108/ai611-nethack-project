@@ -121,7 +121,7 @@ class PopArtAgent(nn.Module):
 
     def reset(self):
         done = th.ones(self.num_env, dtype=bool, device=self.device)
-        prv_obs = self._format_observations(self.env.reset())
+        prv_obs = self.env.reset()
         core_state = self.state_encoder.initial_state(batch_size=self.num_env)
         core_state = tuple(s.to(self.device) for s in core_state)
         self._save_values(done, prv_obs, core_state)
@@ -135,7 +135,6 @@ class PopArtAgent(nn.Module):
         return self.done, self.prv_obs, self.core_state
 
     def interact(self):
-        buf = []
         done, prv_obs, prv_core_state = self._retrive_values()
         initial_core_state = prv_core_state
 
@@ -146,6 +145,12 @@ class PopArtAgent(nn.Module):
         # state representations...
         s0 = tuple(s.to(self.device) for s in s0)
 
+        buf_s0 = []
+        buf_a  = []
+        buf_lp = []
+        buf_s1 = []
+        buf_r  = []
+        buf_d  = []
         for _ in range(self.num_interactions):
             with th.no_grad():
                 state, core_state = self.state_encoder(
@@ -157,9 +162,14 @@ class PopArtAgent(nn.Module):
                 log_prob = dist.log_prob(action).squeeze()
 
             obs, rew, done, info = self.env.step(action.detach().cpu().numpy())
-            obs = self._format_observations(obs)
             rew = np.asarray(rew, dtype=np.float32)
-            buf.append((prv_obs, action, log_prob, obs, rew, done))
+            # buf.append((prv_obs, action, log_prob, obs, rew, done))
+            buf_s0.append(prv_obs)
+            buf_a.append(action)
+            buf_lp.append(log_prob)
+            buf_s1.append(obs)
+            buf_r.append(rew)
+            buf_d.append(done)
             prv_obs = obs
 
             # NOTE(ycho): Need to reset initial states
@@ -178,34 +188,26 @@ class PopArtAgent(nn.Module):
 
         self._save_values(done, prv_obs, prv_core_state)
 
-        return buf, initial_core_state
-
-    def _format_observations(self, observation, keys=(
-            "glyphs", "blstats")) -> Dict[str, th.Tensor]:
-        observations: Dict[str, th.Tensor] = dict()
-        for key in keys:
-            entry = observation[key]
-            entry = th.from_numpy(entry).unsqueeze(dim=0).to(self.device)
-            observations[key] = entry
-        return observations
+        return (buf_s0, buf_a, buf_lp, buf_s1, buf_r, buf_d), initial_core_state
 
     def sample_steps(self, buf):
-        buf_t = []
-        for x in buf:
-            buf_step = []
-            for e in x:
-                if isinstance(e, np.ndarray):
-                    buf_step.append(th.as_tensor(e))
-                else:
-                    buf_step.append(e)
-            buf_t.append(buf_step)
-        return buf_t
+        return buf
+        #buf_t = []
+        #for x in buf:
+        #    buf_step = []
+        #    for e in x:
+        #        if isinstance(e, np.ndarray):
+        #            buf_step.append(th.as_tensor(e))
+        #        else:
+        #            buf_step.append(e)
+        #    buf_t.append(buf_step)
+        #return buf_t
 
     def _learn_step(self):
         # -- collect-rollouts --
         buf, initial_core_state = self.interact()
         samples = self.sample_steps(buf)
-        obs0s, actions, lp0, obs1s, rewards, dones = zip(*samples)
+        obs0s, actions, lp0, obs1s, rewards, dones = samples#zip(*samples)
 
         # T, B, ...
         obs0s = self._stack_observations(obs0s)
@@ -268,16 +270,17 @@ class PopArtAgent(nn.Module):
 
     def _stack_observations(self, observations: Iterable
                             [Dict[str, th.Tensor]]) -> Dict[str, th.Tensor]:
-        _temp_obs_stack: Dict[str, List[th.Tensor]] = dict()
-        keys: List[str] = list()
-        for observation in observations:
-            for key, value in observation.items():
-                if key not in _temp_obs_stack:
-                    _temp_obs_stack[key] = list()
-                    keys.append(key)
-                _temp_obs_stack[key].append(value)
-        return {key: th.cat(_temp_obs_stack[key], dim=0).to(
-            self.device) for key in keys}
+        return th.utils.data.dataloader.default_collate(observations)
+        #_temp_obs_stack: Dict[str, List[th.Tensor]] = dict()
+        #keys: List[str] = list()
+        #for observation in observations:
+        #    for key, value in observation.items():
+        #        if key not in _temp_obs_stack:
+        #            _temp_obs_stack[key] = list()
+        #            keys.append(key)
+        #        _temp_obs_stack[key].append(value)
+        #return {key: th.cat(_temp_obs_stack[key], dim=0).to(
+        #    self.device) for key in keys}
 
     def learn(self, num_steps: int = 1000):
         """Learn for `num_steps` iterations.
