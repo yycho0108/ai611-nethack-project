@@ -11,10 +11,12 @@ import einops
 from torch.distributions import Normal, Independent, Categorical
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
+from pathlib import Path
 
 from vtrace import vtrace_from_importance_weights
-
 from feature import NetHackEncoder
+# from feature_extractor import NetHackNet
+from util import ensure_dir
 
 
 class PopArtModule(nn.Module):
@@ -37,17 +39,23 @@ class PopArtModule(nn.Module):
         y_hat = self.linear(x)
         with th.no_grad():
             y = y_hat * self.sigma * self.mu
+
         # FIXME(ycho): hack with single-task assumption !!!!
         return (y.squeeze(-1), y_hat.squeeze(-1))
 
-    def update_parameters(self, vs, task):
+    def update_parameters(self,
+                          vs: th.Tensor,
+                          task: th.Tensor):
+        """
+        task: task ID
+        """
         mu0 = self.mu
         sigma0 = self.sigma
 
-        vs = vs * task
+        vs = vs[..., None] * task  # TxBxK, K=num tasks
         n = task.sum((0, 1))
-        mu = vs.sum((0, 1)) / n
-        nu = th.sum(vs**2, (0, 1)) / n
+        mu = vs.sum((0, 1)) / n  # K, I guess per task
+        nu = th.sum(th.square(vs), (0, 1)) / n
         sigma = th.sqrt(nu - mu**2)
         sigma = th.clamp(sigma, min=1e-4, max=1e+6)
 
@@ -63,7 +71,7 @@ class PopArtModule(nn.Module):
         self.linear.weight.data = (
             self.linear.weight.t() * sigma0 / self.sigma).t()
         self.linear.bias.data = (
-            sigma0 * self.linear.bias + oldmu - self.mu) / self.sigma
+            sigma0 * self.linear.bias + mu0 - self.mu) / self.sigma
 
 
 class PopArtAgent(nn.Module):
@@ -74,7 +82,9 @@ class PopArtAgent(nn.Module):
                  num_env: int = 8,
                  num_interactions: int = 128,
                  hidden_dim: int = 4,
-                 use_continuous_actions: bool = False):
+                 use_continuous_actions: bool = False,
+                 gamma: float = 0.999
+                 ):
         super().__init__()
         self.device = device
         self.env = env
@@ -82,6 +92,11 @@ class PopArtAgent(nn.Module):
         self.num_interactions = num_interactions
         self.state_encoder = state_encoder
         self.action_dim = self.env.action_space.n
+
+        self.gamma = gamma
+
+        # FIXME(ycho): should be able to make them different...
+        self.batch_size: int = num_env
 
         if use_continuous_actions:
             self.policy = nn.Sequential(
@@ -95,18 +110,33 @@ class PopArtAgent(nn.Module):
                 nn.LeakyReLU(),
                 nn.Linear(hidden_dim, self.action_dim, bias=False)
             )
-        self.pop_art = PopArtModule(
-            hidden_dim,
-            1)
+        self.pop_art = PopArtModule(hidden_dim, 1)
         self.optimizer = th.optim.Adam(self.parameters())
+
+    def save_ckpt(self, ckpt_file: str):
+        ckpt_file = Path(ckpt_file)
+        ensure_dir(ckpt_file.parent)
+        save_dict: Dict[str, Any] = {}
+        save_dict['model'] = self.state_dict()
+        if self.optimizer is not None:
+            save_dict['optimizer'] = self.optimizer.state_dict()
+        th.save(save_dict, str(ckpt_file))
+
+    def load_ckpt(self, ckpt_file: str):
+        ckpt_file = Path(ckpt_file)
+        save_dict = th.load(str(ckpt_file))
+        self.load_state_dict(save_dict['model'])
+        if self.optimizer is not None:
+            self.optimizer.load_state_dict(save_dict['optimizer'])
 
     def get_action_distribution(
             self, state: th.Tensor) -> th.distributions.Distribution:
         params = self.policy(state)
-        params = params.reshape(-1, self.num_env, self.action_dim)
-        return Categorical(logits=params)
+        params = params.reshape(state.shape[:-1] + (self.action_dim,))
+        # NOTE(ycho): below lbock for continuous actions
         # mu, std = einops.rearrange(params, '... (k d) -> k ... d', k=2)
         # return Independent(Normal(mu, std), 1)
+        return Categorical(logits=params)
 
     def get_action(self, state: th.Tensor,
                    deterministic: bool = True):
@@ -115,14 +145,16 @@ class PopArtAgent(nn.Module):
             # NOTE(ycho): does not generally work
             # for distribution variants, such as
             # Independent / Transformed / Cauchy ...
-            return dist.mean
+            if isinstance(dist, th.distributions.Categorical):
+                return th.argmax(dist.logits, dim=-1)
         else:
-            return dist.sample()
+            return dist.rsample()
 
     def reset(self):
         done = th.ones(self.num_env, dtype=bool, device=self.device)
         prv_obs = self.env.reset()
-        core_state = self.state_encoder.initial_state(batch_size=self.num_env)
+        core_state = self.state_encoder.initial_state(
+            batch_size=self.num_env)
         core_state = tuple(s.to(self.device) for s in core_state)
         self._save_values(done, prv_obs, core_state)
 
@@ -146,18 +178,18 @@ class PopArtAgent(nn.Module):
         s0 = tuple(s.to(self.device) for s in s0)
 
         buf_s0 = []
-        buf_a  = []
+        buf_a = []
         buf_lp = []
         buf_s1 = []
-        buf_r  = []
-        buf_d  = []
+        buf_r = []
+        buf_d = []
         for _ in range(self.num_interactions):
             with th.no_grad():
                 state, core_state = self.state_encoder(
                     prv_obs, prv_core_state, th.as_tensor(
                         done, dtype=th.bool, device=self.device)[None])
                 dist = self.get_action_distribution(state)
-                action = dist.sample().squeeze()
+                action = dist.sample()
                 # NOTE(ycho): store `log_prob` for vtrace calculation
                 log_prob = dist.log_prob(action).squeeze()
 
@@ -188,7 +220,8 @@ class PopArtAgent(nn.Module):
 
         self._save_values(done, prv_obs, prv_core_state)
 
-        return (buf_s0, buf_a, buf_lp, buf_s1, buf_r, buf_d), initial_core_state
+        return (buf_s0, buf_a, buf_lp, buf_s1,
+                buf_r, buf_d), initial_core_state
 
     def sample_steps(self, buf):
         return buf
@@ -207,31 +240,39 @@ class PopArtAgent(nn.Module):
         # -- collect-rollouts --
         buf, initial_core_state = self.interact()
         samples = self.sample_steps(buf)
-        obs0s, actions, lp0, obs1s, rewards, dones = samples#zip(*samples)
+        obs0s, actions, lp0, obs1s, rewards, dones = samples  # zip(*samples)
 
+        # Format rollouts.
         # T, B, ...
         obs0s = self._stack_observations(obs0s)
         actions = th.stack(actions, axis=0)
         lp0 = th.stack(lp0, axis=0)
         obs1s = self._stack_observations(obs1s)
-        rewards = th.stack(rewards, axis=0).to(self.device)
-        dones = th.stack(dones, axis=0).to(self.device)
+        if not isinstance(rewards, th.Tensor):
+            rewards = th.utils.data.dataloader.default_collate(
+                rewards).to(dtype=th.float32, device=self.device)
+        if not isinstance(dones, th.Tensor):
+            dones = th.utils.data.dataloader.default_collate(
+                dones).to(dtype=bool, device=self.device)
 
         state0s, _ = self.state_encoder(obs0s, initial_core_state, dones)
         action_dist = self.get_action_distribution(state0s)
         lp1 = action_dist.log_prob(actions)
         baseline, normalized_baseline = self.pop_art(state0s)
-        baseline = baseline.reshape((-1, self.num_env))
-        normalized_baseline = normalized_baseline.reshape((-1, self.num_env))
+
+        # --> to (T,B)
+        baseline = baseline.reshape((-1, self.batch_size))
+        normalized_baseline = normalized_baseline.reshape(
+            (-1, self.batch_size))
+
         action = action_dist.sample()
         log_prob = action_dist.log_prob(action)
-        log_rho = (lp1 - lp0)  # log importance ratio and stuff
-        # log_rho = th.clamp(log_rho, max=0.0)
+        log_rho = (lp1 - lp0)  # log of importance ratio.
         rho = th.exp(log_rho)
 
         # Derive bootstrap / discount values
         bootstrap_value = baseline[-1]
-        discounts = (~dones).to(th.float32) * 0.99
+        discounts = (~dones).to(th.float32) * self.gamma
 
         # Vtrace calculation
         vs, pg_adv = vtrace_from_importance_weights(
@@ -239,16 +280,16 @@ class PopArtAgent(nn.Module):
             discounts,
             rewards,
             baseline,
-            dim_t=1)  # NO idea, to be honest
+            dim_t=0)
 
         # normalized v_s
         nvs = (vs - self.pop_art.mu) / self.pop_art.sigma
         # policy gradient loss, valid_mask=?
-        pg_loss = th.mean(-log_prob * pg_adv).to(th.float32)
+        pg_loss = th.mean(-log_prob * pg_adv)
         # value baseline loss, valid_mask=?
-        vb_loss = F.mse_loss(nvs, normalized_baseline).to(th.float32)
+        vb_loss = 0.05 * F.mse_loss(nvs, normalized_baseline)
         # entropy loss [...]
-        ent_loss = -th.mean(action_dist.entropy())
+        ent_loss = -0.01 * th.mean(action_dist.entropy())
 
         loss = (pg_loss + vb_loss + ent_loss)
 
@@ -259,13 +300,16 @@ class PopArtAgent(nn.Module):
 
         # TODO(ycho): `task` labels are required for pop-art.
         # Should we supply this in some way??
-        # self.pop_art.update_parameters(vs, task)
+        tasks = F.one_hot(th.zeros_like(dones, dtype=th.long), 1).float()
+        self.pop_art.update_parameters(vs, tasks)
+        avg_eplen = (1.0 / th.mean(dones.to(th.float32)))
         return {
             'pg_loss': pg_loss,
             'vb_loss': vb_loss,
             'ent_loss': ent_loss,
             'loss': loss,
-            'reward': th.mean(rewards)
+            'reward': th.mean(rewards),
+            'avg_eplen': avg_eplen
         }
 
     def _stack_observations(self, observations: Iterable
@@ -282,16 +326,20 @@ class PopArtAgent(nn.Module):
         #return {key: th.cat(_temp_obs_stack[key], dim=0).to(
         #    self.device) for key in keys}
 
-    def learn(self, num_steps: int = 1000):
+    def learn(self,
+              num_steps: int = 1000,
+              log_dir: str = './log',
+              save_steps: int = 100):
         """Learn for `num_steps` iterations.
 
         NOTE(ycho): actual number of env-steps
         = num_steps X num_interactions X num_envs.
         """
         self.reset()
-        writer = SummaryWriter('./log')
+        writer = SummaryWriter(log_dir)
         with tqdm(range(num_steps)) as pbar:
             for i in pbar:
+                # with th.autograd.detect_anomaly():
                 tensors: Dict[str, th.Tensor] = self._learn_step()
 
                 loss = tensors['loss'].item()
@@ -302,3 +350,6 @@ class PopArtAgent(nn.Module):
                     writer.add_scalar(k, v.item(), global_step)
                 writer.add_scalar('reward', tensors['reward'].item(),
                                   global_step)
+
+                if (i % save_steps == 0):
+                    self.save_ckpt(log_dir / F'nh-pa-{i:05d}.pt')

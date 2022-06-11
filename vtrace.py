@@ -30,7 +30,7 @@ def vtrace_from_importance_weights(
         clipped_rhos = rhos
     cs = th.clamp_max(rhos, 1.0)
 
-    # Compute TD target
+    # Compute TD target.
     v_prv = values
     v_nxt = th.cat((
         th.narrow(values, dim_t, 1, values.shape[dim_t] - 1),
