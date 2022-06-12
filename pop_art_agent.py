@@ -138,7 +138,8 @@ class PopArtAgent(nn.Module):
                 nn.Linear(hidden_dim, self.action_dim, bias=False)
             )
         self.pop_art = PopArtModule(self.state_encoder.h_dim, self.num_tasks)
-        self.optimizer = th.optim.Adam(self.parameters())
+        self.optimizer = th.optim.Adam(self.parameters(),
+                                       weight_decay=1e-4)
 
         # NOTE(ycho): Replay buffer.
         self.buf_s0 = deque(maxlen=4 * self.num_interactions)
@@ -359,7 +360,7 @@ class PopArtAgent(nn.Module):
         # value baseline loss, valid_mask=?
         vb_loss = 0.5 * F.mse_loss(nvs, normalized_baseline)
         # entropy loss [...]
-        ent_loss = 0.0006 * -th.mean(action_dist.entropy())
+        ent_loss = 0.01 * -th.mean(action_dist.entropy())
 
         loss = (pg_loss + vb_loss + ent_loss)
 
