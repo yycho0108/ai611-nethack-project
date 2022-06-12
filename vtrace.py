@@ -10,13 +10,21 @@ def vtrace_from_importance_weights(
         discounts: th.Tensor,
         rewards: th.Tensor,
         values: th.Tensor,
-        dim_t: int = 0,
+        # Time dimension
+        dim_t: int,
+
+        # pop-art parameters
+        normalized_values: th.Tensor = None,
+        mu: th.Tensor = None,
+        sigma: th.Tensor = None,
 
         bootstrap_value: Optional[th.Tensor] = None,
         max_rho: Optional[float] = 1.0,
-        max_pg_rho: Optional[float] = 1.0) -> Tuple[th.Tensor, th.Tensor]:
-
+        max_pg_rho: Optional[float] = 1.0,
+        use_popart: bool = True) -> Tuple[th.Tensor, th.Tensor]:
     if bootstrap_value is None:
+        # NOTE(ycho): we don't need unsqueeze() by default,
+        # but if bootstrap_value is not None, we may need to do unsqueeze()
         bootstrap_value = th.narrow(values, dim_t,
                                     values.shape[dim_t] - 1, 1)
 
@@ -40,11 +48,11 @@ def vtrace_from_importance_weights(
     # Accumulate.
     acc = th.zeros_like(bootstrap_value)
     result = []
+    dcs = (discounts * cs)
     for t in range(discounts.shape[dim_t] - 1, -1, -1):
         delta = th.narrow(deltas, dim_t, t, 1)
-        discount = th.narrow(discounts, dim_t, t, 1)
-        c = th.narrow(cs, dim_t, t, 1)
-        acc = delta + discount * c * acc
+        dc = th.narrow(dcs, dim_t, t, 1)
+        acc = delta + dc * acc
         result.append(acc)
     result.reverse()
     vs = values + th.cat(result, dim=dim_t)
@@ -57,5 +65,11 @@ def vtrace_from_importance_weights(
         clipped_pg_rhos = th.clamp_max(rhos, max_pg_rho)
     else:
         clipped_pg_rhos = rhos
-    pg_adv = clipped_pg_rhos * (rewards + discounts * vs_nxt - v_prv)
+    # NOTE(ycho): non pop-art version.
+    # NOTE(ycho): pop-art version.
+    if use_popart:
+        pg_adv = clipped_pg_rhos * (
+            ((rewards + discounts * vs_nxt) - mu) / sigma - normalized_values)
+    else:
+        pg_adv = clipped_pg_rhos * (rewards + discounts * vs_nxt - v_prv)
     return (vs, pg_adv)

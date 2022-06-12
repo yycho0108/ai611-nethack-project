@@ -8,6 +8,7 @@ F = nn.functional
 from functools import partial
 from pop_art_agent import PopArtAgent
 from feature import NetHackEncoder
+from typing import Tuple, Dict
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
@@ -19,15 +20,20 @@ class FormatObservationWrapper(gym.ObservationWrapper):
                  ):
         super().__init__(env)
         self.keys = keys
-        #self.observation_space = self.env.observation_space
+        self.observation_space = gym.spaces.Dict(
+            {k: env.observation_space[k] for k in keys})
 
-    def observation(self, observation):
-        observations: Dict[str, th.Tensor] = dict()
-        for key in keys:
-            entry = observation[key]
-            entry = th.from_numpy(entry).unsqueeze(dim=0)
-            observations[key] = entry
-        return observations
+    def step_wait(self, *args, **kwds):
+        observation, reward, done, info = self.env.step_wait(*args, **kwds)
+        return self.observation(observation), reward, done, info
+
+    def observation(self, obs_in):
+        obs_out: Dict[str, np.ndarray] = dict()
+        for key in self.keys:
+            entry = obs_in[key]
+            # entry = th.from_numpy(entry).unsqueeze(dim=0)
+            obs_out[key] = entry[None]
+        return obs_out
 
 
 def make_env(*args, **kwds) -> gym.Env:
