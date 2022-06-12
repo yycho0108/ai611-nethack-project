@@ -12,6 +12,8 @@ from typing import Tuple, Dict
 
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
+from util import ensure_dir, get_new_dir, get_device
+
 
 class FormatObservationWrapper(gym.ObservationWrapper):
     def __init__(self,
@@ -32,7 +34,7 @@ class FormatObservationWrapper(gym.ObservationWrapper):
         for key in self.keys:
             entry = obs_in[key]
             # entry = th.from_numpy(entry).unsqueeze(dim=0)
-            obs_out[key] = entry[None]
+            obs_out[key] = entry#[None]
         return obs_out
 
 
@@ -46,19 +48,22 @@ def main():
     num_env = 16
     env_fns = [make_env for _ in range(num_env)]
     env = SubprocVecEnv(env_fns)
-    device: th.device = (
-        th.device('cuda') if th.cuda.is_available() else th.device('cpu'))
+    device: th.device = get_device()
+
     state_encoder = NetHackEncoder(
         observation_shape=env.observation_space,
+        device=device,
         use_lstm=True
     ).to(device)
     agent = PopArtAgent(
         device,
         state_encoder,
         env,
-        num_env=num_env,
         hidden_dim=512).to(device)
-    agent.learn()
+
+    path = get_new_dir('/tmp/nethack')
+    log_path = ensure_dir(path / 'log')
+    agent.learn(log_dir=log_path)
 
 
 if __name__ == '__main__':

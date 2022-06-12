@@ -231,9 +231,13 @@ class PopArtAgent(nn.Module):
 
         for _ in range(self.num_interactions):
             with th.no_grad():
+                # Add time dimension.
+                _prv_obs = {k: v[None] for k, v in prv_obs.items()}
                 state, core_state = self.state_encoder(
-                    prv_obs, prv_core_state, th.as_tensor(
+                    _prv_obs, prv_core_state, th.as_tensor(
                         done, dtype=th.bool, device=self.device)[None])
+                # Remove time dimension.
+                state = state.squeeze(dim=0)
                 dist = self.get_action_distribution(state)
                 action = dist.sample()
                 # NOTE(ycho): store `log_prob` for vtrace calculation
@@ -318,6 +322,7 @@ class PopArtAgent(nn.Module):
             dones = th.utils.data.dataloader.default_collate(
                 dones).to(dtype=bool, device=self.device)
 
+        # print('obs0s', obs0s['glyphs'].shape)
         state0s, _ = self.state_encoder(obs0s, initial_core_state, dones)
         action_dist = self.get_action_distribution(state0s)
         lp1 = action_dist.log_prob(actions)
@@ -419,6 +424,7 @@ class PopArtAgent(nn.Module):
         """
         self.reset()
         writer = SummaryWriter(log_dir)
+        log_dir = Path(log_dir)
         try:
             with tqdm(range(num_steps)) as pbar:
                 for i in pbar:
