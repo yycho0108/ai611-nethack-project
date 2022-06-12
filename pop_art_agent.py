@@ -24,7 +24,6 @@ from pathlib import Path
 
 from vtrace import vtrace_from_importance_weights
 from feature import NetHackEncoder
-# from feature_extractor import NetHackNet
 from util import ensure_dir
 from stable_baselines3.common.vec_env.base_vec_env import VecEnv
 from collections import deque
