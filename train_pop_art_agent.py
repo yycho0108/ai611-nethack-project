@@ -34,7 +34,7 @@ class FormatObservationWrapper(gym.ObservationWrapper):
         for key in self.keys:
             entry = obs_in[key]
             # entry = th.from_numpy(entry).unsqueeze(dim=0)
-            obs_out[key] = entry#[None]
+            obs_out[key] = entry  # [None]
         return obs_out
 
 
@@ -63,7 +63,8 @@ def main():
 
     path = get_new_dir('/tmp/nethack')
     log_path = ensure_dir(path / 'log')
-    agent.learn(log_dir=log_path)
+    agent.learn(100000, log_dir=log_path,
+                save_steps=10000)
 
 
 if __name__ == '__main__':
