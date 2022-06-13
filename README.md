@@ -26,6 +26,15 @@ Afterwards, you can freely train our agent:
 $ python3 train_pop_art_agent.py
 ```
 
+### Optional tensorboard visualization:
+
+```bash
+$ tensorboard --logdir /tmp/nethack --host 0.0.0.0 --port 6006
+```
+
+Afterwards, open `localhost:6006` on your browser to see the 
+logged outputs.
+
 ## How to record the video
 
 After training the agent, you can record the video as follows:
