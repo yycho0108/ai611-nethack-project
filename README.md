@@ -4,6 +4,8 @@ Project Repository for [Nethack Challenge](https://nethackchallenge.com/) .
 
 AI611: Deep Reinforcement Learning, KAIST GSAI 2022SP
 
+![demo.gif](demo.gif)
+
 ## How to train the agent
 
 First, run the docker container:
@@ -51,6 +53,6 @@ In general, you'd want to set `PPPPP` to the latest one, and `I = 0`.
 
 # Collaborators
 
-* Yoonyoung(Jamie) Cho[Github](https://github.com/yycho0108)[Website](https://yycho0108.github.io)
-* Minchan Kim[Github](https://github.com/JoHeeSang)
-* Heesang Jo[Github](https://github.com/Minchan-Kim)
+* Yoonyoung(Jamie) Cho [Github](https://github.com/yycho0108), [Website](https://yycho0108.github.io)
+* Minchan Kim [Github](https://github.com/JoHeeSang)
+* Heesang Jo [Github](https://github.com/Minchan-Kim)
