@@ -197,12 +197,13 @@ class NetHackEncoder(nn.Module):
         if self.use_lstm:
             self.core = nn.LSTM(self.h_dim, self.h_dim, num_layers=1)
 
-    def initial_state(self, batch_size=1):
+    def initial_state(self, batch_size=1, device:th.device=None):
         if not self.use_lstm:
             return tuple()
         return tuple(
             th.zeros(
-                self.core.num_layers, batch_size, self.core.hidden_size)
+                self.core.num_layers, batch_size, self.core.hidden_size,
+                device=device)
             for _ in range(2))
 
     def _select(self, embed: nn.Embedding, x: th.Tensor):
