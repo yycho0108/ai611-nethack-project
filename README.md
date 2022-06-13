@@ -39,6 +39,8 @@ logged outputs.
 
 After training the agent, you can record the video as follows:
 
+[Link to pretrained checkpoint](https://drive.google.com/file/d/1IvzxFNNX4Ara3-UDhytr51lSJ9GL1ZCU/view?usp=sharing)
+
 ```bash
 $ python3 record.video.py ${CKPT_FILE} # e.g. '/tmp/nethack/run-022/log/nh-pa-last.pt'
 $ python3 -m nle.scripts.ttyplay /tmp/record/nle.PPPPP.I.ttyrec.bz2
