@@ -166,10 +166,12 @@ class NetHackEncoder(nn.Module):
     def __init__(
         self,
         observation_shape,
+        device:th.device,
         use_lstm: bool = True,
-        embedding_dim: int = 32
+        embedding_dim: int = 32,
     ):
         super(NetHackEncoder, self).__init__()
+        self.device = device
 
         self.glyph_shape = observation_shape["glyphs"].shape
         self.blstats_size = observation_shape["blstats"].shape[0]
@@ -212,6 +214,8 @@ class NetHackEncoder(nn.Module):
     def forward(self, env_outputs: Dict[str, th.Tensor], core_state, done):
         # -- [T x B x F]
         blstats = env_outputs["blstats"]
+        blstats = th.as_tensor(blstats, device = self.device)
+
         T, B, _ = blstats.shape
         # -- [B' x F] (B' = T x B)
         blstats = blstats.view(T * B, -1).float()
@@ -221,6 +225,7 @@ class NetHackEncoder(nn.Module):
 
         # -- [T x B x H x W]
         glyphs = env_outputs["glyphs"]
+        glyphs = th.as_tensor(glyphs, device = self.device)
         # -- [B' x H x W] 
         glyphs = th.flatten(glyphs, 0, 1)
         glyphs = glyphs.long()
@@ -257,7 +262,9 @@ class NetHackEncoder(nn.Module):
                 core_state = tuple(nd * s for s in core_state)
                 output, core_state = self.core(input.unsqueeze(0), core_state)
                 core_output_list.append(output)
-            core_output = th.flatten(th.cat(core_output_list), 0, 1)
+            # core_output = th.flatten(th.cat(core_output_list), 0, 1)
+            core_output = th.cat(core_output_list, dim=0)
+            # print('core_output', core_output.shape) # 1x1x16x512
         else:
             core_output = st
 
