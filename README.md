@@ -4,6 +4,8 @@ Project Repository for [Nethack Challenge](https://nethackchallenge.com/) .
 
 AI611: Deep Reinforcement Learning, KAIST GSAI 2022SP
 
+![demo.gif](demo.gif)
+
 ## How to train the agent
 
 First, run the docker container:
@@ -39,6 +41,8 @@ logged outputs.
 
 After training the agent, you can record the video as follows:
 
+[Link to pretrained checkpoint](https://drive.google.com/file/d/1IvzxFNNX4Ara3-UDhytr51lSJ9GL1ZCU/view?usp=sharing)
+
 ```bash
 $ python3 record.video.py ${CKPT_FILE} # e.g. '/tmp/nethack/run-022/log/nh-pa-last.pt'
 $ python3 -m nle.scripts.ttyplay /tmp/record/nle.PPPPP.I.ttyrec.bz2
@@ -49,6 +53,6 @@ In general, you'd want to set `PPPPP` to the latest one, and `I = 0`.
 
 # Collaborators
 
-* Yoonyoung(Jamie) Cho[Github](https://github.com/yycho0108)[Website](https://yycho0108.github.io)
-* Minchan Kim[Github](https://github.com/JoHeeSang)
-* Heesang Jo[Github](https://github.com/Minchan-Kim)
+* Yoonyoung(Jamie) Cho [Github](https://github.com/yycho0108), [Website](https://yycho0108.github.io)
+* Minchan Kim [Github](https://github.com/JoHeeSang)
+* Heesang Jo [Github](https://github.com/Minchan-Kim)
